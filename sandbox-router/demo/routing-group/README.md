@@ -58,7 +58,11 @@ oc apply -f demo.yaml
 Wait until all three claims are ready:
 
 ```bash
-oc wait --for=condition=Ready   sandboxclaim/demo-a   sandboxclaim/demo-b   sandboxclaim/demo-c   --timeout=60s
+oc wait --for=condition=Ready \
+  sandboxclaim/demo-a \
+  sandboxclaim/demo-b \
+  sandboxclaim/demo-c \
+  --timeout=60s
 ```
 
 Check the claims:
@@ -82,14 +86,11 @@ Unclaimed warm-pool spares must not be routing-group members.
 Port-forward the router in a second terminal:
 
 ```bash
-oc -n agent-sandbox-system   port-forward svc/sandbox-router-svc 8080:8080
+oc -n agent-sandbox-system \
+  port-forward svc/sandbox-router-svc 8080:8080
 ```
 
-Check that the forward is alive:
-
-```bash
-curl http://127.0.0.1:8080/healthz
-```
+The `sandbox-router-svc` Service exposes the proxy port only. The router health probe listens separately on port 8081, so for this demo it is enough to confirm that `port-forward` reports `Forwarding from ...` and then send a routing request.
 
 ## Test group routing
 
@@ -102,7 +103,11 @@ Run:
 Or send one request manually:
 
 ```bash
-curl   -H 'X-Sandbox-Group: test-group'   -H 'X-Sandbox-Namespace: default'   -H 'X-Sandbox-Port: 8080'   http://127.0.0.1:8080/invoke-agent
+curl \
+  -H 'X-Sandbox-Group: test-group' \
+  -H 'X-Sandbox-Namespace: default' \
+  -H 'X-Sandbox-Port: 8080' \
+  http://127.0.0.1:8080/invoke-agent
 ```
 
 The response is the backend pod name.
