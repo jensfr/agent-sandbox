@@ -33,8 +33,8 @@ request() {
 list_group_pods() {
   "${KUBE_CLI}" -n "${NAMESPACE}" get pods \
     -l "${LABEL_KEY}=${ROUTING_GROUP}" \
-    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' \
-    2>/dev/null | sed '/^$/d' | sort
+    -o go-template='{{range .items}}{{if not .metadata.deletionTimestamp}}{{$pod := .}}{{range .status.conditions}}{{if and (eq .type "Ready") (eq .status "True")}}{{printf "%s\n" $pod.metadata.name}}{{end}}{{end}}{{end}}{{end}}' \
+    2>/dev/null | sort
 }
 
 echo "== Routing-group failover test =="
@@ -57,9 +57,9 @@ ROUTING_GROUP="$("${KUBE_CLI}" -n "${NAMESPACE}" get pod "${TARGET_SANDBOX}" \
 echo "   routing group: ${ROUTING_GROUP}"
 
 echo
-echo "3. Current group members"
+echo "3. Current eligible group members"
 mapfile -t INITIAL_MEMBERS < <(list_group_pods)
-(( ${#INITIAL_MEMBERS[@]} >= 2 )) || { echo "FAIL: need at least two members" >&2; exit 1; }
+(( ${#INITIAL_MEMBERS[@]} >= 2 )) || { echo "FAIL: need at least two eligible members" >&2; exit 1; }
 printf '   %s\n' "${INITIAL_MEMBERS[@]}"
 
 mapfile -t EXPECTED_AFTER < <(printf '%s\n' "${INITIAL_MEMBERS[@]}" | grep -Fvx -- "${TARGET_SANDBOX}")
