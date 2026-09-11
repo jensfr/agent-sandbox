@@ -9,10 +9,15 @@ SANDBOX_PORT="${SANDBOX_PORT:-8080}"
 REQUEST_PATH="${REQUEST_PATH:-/invoke-agent}"
 REQUESTS="${REQUESTS:-12}"
 
-echo "Claimed Pods in routing group ${ROUTING_GROUP}:"
-"${KUBE_CLI}" -n "${NAMESPACE}" get pods \
-  -l "sandbox.users.io/routing-group=${ROUTING_GROUP}" \
-  -o wide
+list_eligible_group_pods() {
+  "${KUBE_CLI}" -n "${NAMESPACE}" get pods \
+    -l "sandbox.users.io/routing-group=${ROUTING_GROUP}" \
+    -o go-template='{{range .items}}{{if not .metadata.deletionTimestamp}}{{$pod := .}}{{range .status.conditions}}{{if and (eq .type "Ready") (eq .status "True")}}{{printf "%s\n" $pod.metadata.name}}{{end}}{{end}}{{end}}{{end}}' \
+    2>/dev/null | sort
+}
+
+echo "Eligible Ready Pods in routing group ${ROUTING_GROUP}:"
+list_eligible_group_pods | sed 's/^/  /'
 
 echo
 echo "Sending ${REQUESTS} requests using X-Sandbox-Group only:"
