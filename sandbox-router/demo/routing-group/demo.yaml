@@ -1,0 +1,77 @@
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxTemplate
+metadata:
+  name: demo-template
+  namespace: default
+spec:
+  service: true
+  networkPolicyManagement: Unmanaged
+  podTemplate:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: echo
+        image: registry.k8s.io/e2e-test-images/agnhost:2.54
+        args: ["serve-hostname", "--http", "--port", "8080"]
+        ports:
+        - name: http
+          containerPort: 8080
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8080
+          initialDelaySeconds: 1
+          periodSeconds: 2
+        resources:
+          requests:
+            cpu: 100m
+            memory: 64Mi
+          limits:
+            cpu: 500m
+            memory: 128Mi
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
+metadata:
+  name: demo-pool
+  namespace: default
+spec:
+  replicas: 3
+  sandboxTemplateRef:
+    name: demo-template
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxClaim
+metadata:
+  name: demo-a
+  namespace: default
+spec:
+  warmPoolRef:
+    name: demo-pool
+  additionalPodMetadata:
+    labels:
+      sandbox.users.io/routing-group: test-group
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxClaim
+metadata:
+  name: demo-b
+  namespace: default
+spec:
+  warmPoolRef:
+    name: demo-pool
+  additionalPodMetadata:
+    labels:
+      sandbox.users.io/routing-group: test-group
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxClaim
+metadata:
+  name: demo-c
+  namespace: default
+spec:
+  warmPoolRef:
+    name: demo-pool
+  additionalPodMetadata:
+    labels:
+      sandbox.users.io/routing-group: test-group
