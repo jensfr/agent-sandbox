@@ -8,6 +8,7 @@ LOCAL_PORT="${LOCAL_PORT:-18080}"
 ROUTER_URL="http://127.0.0.1:${LOCAL_PORT}"
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PF_LOG="${TMPDIR:-/tmp}/routing-group-port-forward.log"
 
 cleanup() {
   if [[ -n "${PF_PID:-}" ]]; then
@@ -28,17 +29,29 @@ echo '$ oc wait --for=condition=Ready sandboxclaim/demo-a sandboxclaim/demo-b sa
   --timeout=60s
 echo
 
+: >"${PF_LOG}"
 "${KUBE_CLI}" -n "${ROUTER_NAMESPACE}" port-forward \
   svc/sandbox-router-svc "${LOCAL_PORT}:8080" \
-  >/tmp/routing-group-port-forward.log 2>&1 &
+  >"${PF_LOG}" 2>&1 &
 PF_PID=$!
 
 for _ in $(seq 1 50); do
-  if curl --silent --fail "http://127.0.0.1:${LOCAL_PORT}/healthz" >/dev/null 2>&1; then
+  if grep -q "Forwarding from" "${PF_LOG}"; then
     break
+  fi
+  if ! kill -0 "${PF_PID}" >/dev/null 2>&1; then
+    echo "port-forward exited unexpectedly:" >&2
+    cat "${PF_LOG}" >&2
+    exit 1
   fi
   sleep 0.1
 done
+
+if ! grep -q "Forwarding from" "${PF_LOG}"; then
+  echo "port-forward did not become ready" >&2
+  cat "${PF_LOG}" >&2
+  exit 1
+fi
 
 echo '$ oc get sandboxclaim'
 "${KUBE_CLI}" -n "${NAMESPACE}" get sandboxclaim
