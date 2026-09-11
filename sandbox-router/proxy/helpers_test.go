@@ -70,6 +70,7 @@ func pickFreePortStr(t *testing.T) string {
 type stubLookup struct {
 	mu                sync.Mutex
 	entries           map[types.UID]cache.Entry
+	groups            map[string][]types.UID
 	invalidated       []types.UID
 	invalidatedByName []string
 }
@@ -90,6 +91,18 @@ func (s *stubLookup) GetByName(namespace, name string) (cache.Entry, bool) {
 		}
 	}
 	return cache.Entry{}, false
+}
+
+func (s *stubLookup) GetByGroup(namespace, group string) (types.UID, cache.Entry, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	uids := s.groups[namespace+"/"+group]
+	if len(uids) == 0 {
+		return "", cache.Entry{}, false
+	}
+	uid := uids[0]
+	e, ok := s.entries[uid]
+	return uid, e, ok
 }
 
 func (s *stubLookup) Invalidate(uid types.UID) bool {

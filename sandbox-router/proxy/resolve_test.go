@@ -27,6 +27,7 @@ import (
 // GetByName scans entries so tests only have to populate one map.
 type fakeLookup struct {
 	entries           map[types.UID]cache.Entry
+	groups            map[string][]types.UID
 	invalidated       []types.UID
 	invalidatedByName []string
 }
@@ -43,6 +44,16 @@ func (f *fakeLookup) GetByName(namespace, name string) (cache.Entry, bool) {
 		}
 	}
 	return cache.Entry{}, false
+}
+
+func (f *fakeLookup) GetByGroup(namespace, group string) (types.UID, cache.Entry, bool) {
+	uids := f.groups[namespace+"/"+group]
+	if len(uids) == 0 {
+		return "", cache.Entry{}, false
+	}
+	uid := uids[0]
+	e, ok := f.entries[uid]
+	return uid, e, ok
 }
 
 func (f *fakeLookup) Invalidate(uid types.UID) bool {

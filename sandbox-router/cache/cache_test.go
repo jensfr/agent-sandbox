@@ -552,3 +552,82 @@ func TestApiVersionInGroup(t *testing.T) {
 		}
 	}
 }
+
+func TestCache_GroupRoutingRoundRobin(t *testing.T) {
+	p1 := makePod("sandbox-a", testPodNS, testUID, testPodIP, true)
+	p1.Labels[PodRoutingGroupLabel] = "test-group"
+	p2 := makePod("sandbox-b", testPodNS, testUID2, testPodIP2, true)
+	p2.Labels[PodRoutingGroupLabel] = "test-group"
+
+	c, _, cancel := newCache(t, p1, p2)
+	defer cancel()
+	if !waitFor(t, func() bool {
+		c.mu.RLock()
+		defer c.mu.RUnlock()
+		return len(c.byGroup[groupKey(testPodNS, "test-group")]) == 2
+	}) {
+		t.Fatal("expected two routing-group members")
+	}
+
+	u1, _, ok := c.GetByGroup(testPodNS, "test-group")
+	if !ok {
+		t.Fatal("first group lookup failed")
+	}
+	u2, _, ok := c.GetByGroup(testPodNS, "test-group")
+	if !ok {
+		t.Fatal("second group lookup failed")
+	}
+	u3, _, ok := c.GetByGroup(testPodNS, "test-group")
+	if !ok {
+		t.Fatal("third group lookup failed")
+	}
+	if u1 == u2 {
+		t.Fatalf("expected two different members, got %q twice", u1)
+	}
+	if u3 != u1 {
+		t.Fatalf("expected round-robin to wrap to %q, got %q", u1, u3)
+	}
+}
+
+func TestCache_UnclaimedWarmPoolPodNotInRoutingGroup(t *testing.T) {
+	pod := makePod(testPodName, testPodNS, testUID, testPodIP, true)
+	pod.Labels[PodWarmPoolLabel] = "pool-hash"
+	pod.Labels[PodRoutingGroupLabel] = "test-group"
+
+	c, _, cancel := newCache(t, pod)
+	defer cancel()
+	if !waitFor(t, func() bool { return c.Len() == 1 }) {
+		t.Fatal("expected warm-pool UID to be cached")
+	}
+	if _, _, ok := c.GetByGroup(testPodNS, "test-group"); ok {
+		t.Fatal("unclaimed warm-pool Pod must not be selectable by group")
+	}
+}
+
+func TestCache_TerminatingPodRemovedFromRoutingGroup(t *testing.T) {
+	pod := makePod(testPodName, testPodNS, testUID, testPodIP, true)
+	pod.Labels[PodRoutingGroupLabel] = "test-group"
+
+	c, client, cancel := newCache(t, pod)
+	defer cancel()
+	if !waitFor(t, func() bool {
+		_, _, ok := c.GetByGroup(testPodNS, "test-group")
+		return ok
+	}) {
+		t.Fatal("expected pod to be in routing group")
+	}
+
+	// Simulate termination: set DeletionTimestamp while pod is still Ready.
+	pod = pod.DeepCopy()
+	now := metav1.Now()
+	pod.DeletionTimestamp = &now
+	if _, err := client.CoreV1().Pods(testPodNS).Update(t.Context(), pod, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if !waitFor(t, func() bool {
+		_, _, ok := c.GetByGroup(testPodNS, "test-group")
+		return !ok
+	}) {
+		t.Fatal("terminating pod must be removed from routing group even while still Ready")
+	}
+}

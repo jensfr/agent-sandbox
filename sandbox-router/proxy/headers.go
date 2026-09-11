@@ -25,6 +25,7 @@ import (
 // integrations have a single source of truth.
 const (
 	HeaderSandboxID        = "X-Sandbox-Id"
+	HeaderSandboxGroup     = "X-Sandbox-Group"
 	HeaderSandboxUID       = "X-Sandbox-Uid"
 	HeaderSandboxNamespace = "X-Sandbox-Namespace"
 	HeaderSandboxPort      = "X-Sandbox-Port"
@@ -127,6 +128,39 @@ func ParseSandboxHeaders(h http.Header, opts ParseOptions) (Target, *Error) {
 		Port:      port,
 		PodIP:     podIP,
 	}, nil
+}
+
+// ParseSandboxGroupHeaders parses the experimental routing-group contract.
+// Group requests identify a logical group instead of an individual Sandbox.
+func ParseSandboxGroupHeaders(h http.Header) (group, namespace string, port int, perr *Error) {
+	group = h.Get(HeaderSandboxGroup)
+	if group == "" {
+		return "", "", 0, &Error{Status: http.StatusBadRequest, Detail: "X-Sandbox-Group header is required."}
+	}
+	if !validDNSLabel(group) {
+		return "", "", 0, &Error{Status: http.StatusBadRequest, Detail: "Invalid sandbox group format."}
+	}
+	if h.Get(HeaderSandboxID) != "" || h.Get(HeaderSandboxUID) != "" || h.Get(HeaderSandboxPodIP) != "" {
+		return "", "", 0, &Error{Status: http.StatusBadRequest, Detail: "X-Sandbox-Group cannot be combined with explicit sandbox target headers."}
+	}
+
+	namespace = h.Get(HeaderSandboxNamespace)
+	if namespace == "" {
+		namespace = DefaultSandboxNamespace
+	}
+	if !validDNSLabel(namespace) {
+		return "", "", 0, &Error{Status: http.StatusBadRequest, Detail: "Invalid namespace format."}
+	}
+
+	port = DefaultSandboxPort
+	if raw := h.Get(HeaderSandboxPort); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > 65535 {
+			return "", "", 0, &Error{Status: http.StatusBadRequest, Detail: "Invalid port format."}
+		}
+		port = n
+	}
+	return group, namespace, port, nil
 }
 
 // validDNSLabel reports whether s is a syntactically valid DNS-1123

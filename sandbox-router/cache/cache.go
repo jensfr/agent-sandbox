@@ -66,6 +66,11 @@ const (
 	// CRD dependency, like PodSandboxNameHashLabel above.
 	PodWarmPoolLabel = "agents.x-k8s.io/warm-pool-sandbox"
 
+	// PodRoutingGroupLabel is an experimental label for the routing-group PoC.
+	// SandboxClaim.additionalPodMetadata can stamp it onto an adopted Pod.
+	// It deliberately uses the default allowed user label domain.
+	PodRoutingGroupLabel = "sandbox.users.io/routing-group"
+
 	// defaultResync is the informer relist period. Short enough to catch
 	// missed events; long enough to not hammer the API server. Matches
 	// typical controller-runtime defaults.
@@ -108,6 +113,12 @@ type Cache struct {
 	// per-sandbox Service, so without a name-keyed lookup those requests
 	// fall through to a DNS form that can never resolve (issue #883).
 	byName map[string]types.UID
+
+	// byGroup contains only Ready, claimed Sandbox Pods. groupOf is the
+	// reverse index used when a Pod changes group or leaves the cache.
+	byGroup   map[string][]types.UID
+	groupOf   map[types.UID]string
+	groupNext map[string]uint64
 }
 
 // Options configure the cache. Namespace is empty for cluster-wide
@@ -151,12 +162,15 @@ func New(o Options) (*Cache, error) {
 	podInformer := factory.Core().V1().Pods().Informer()
 
 	c := &Cache{
-		log:      o.Log,
-		informer: podInformer,
-		factory:  factory,
-		stopCh:   make(chan struct{}),
-		entries:  make(map[types.UID]Entry),
-		byName:   make(map[string]types.UID),
+		log:       o.Log,
+		informer:  podInformer,
+		factory:   factory,
+		stopCh:    make(chan struct{}),
+		entries:   make(map[types.UID]Entry),
+		byName:    make(map[string]types.UID),
+		byGroup:   make(map[string][]types.UID),
+		groupOf:   make(map[types.UID]string),
+		groupNext: make(map[string]uint64),
 	}
 
 	if _, err := podInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -210,6 +224,33 @@ func (c *Cache) GetByName(namespace, name string) (Entry, bool) {
 	return e, ok
 }
 
+// GetByGroup returns one Ready, claimed member of namespace/group.
+// Selection is round-robin within this router replica. Router replicas do
+// not coordinate cursors; that is intentional for this small PoC.
+func (c *Cache) GetByGroup(namespace, group string) (types.UID, Entry, bool) {
+	k := groupKey(namespace, group)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	uids := c.byGroup[k]
+	for len(uids) > 0 {
+		idx := int(c.groupNext[k] % uint64(len(uids)))
+		uid := uids[idx]
+		c.groupNext[k]++
+		if e, ok := c.entries[uid]; ok {
+			return uid, e, true
+		}
+
+		// Defensive cleanup. Normal informer events keep both indexes in sync.
+		uids = append(uids[:idx], uids[idx+1:]...)
+		c.byGroup[k] = uids
+	}
+
+	delete(c.byGroup, k)
+	delete(c.groupNext, k)
+	return "", Entry{}, false
+}
+
 // Len returns the current number of cached entries. Primarily for tests
 // and metrics; not on the request hot path.
 func (c *Cache) Len() int {
@@ -238,7 +279,7 @@ func (c *Cache) onAddOrUpdate(obj any) {
 	if !ok {
 		return
 	}
-	if !podReady(pod) || pod.Status.PodIP == "" {
+	if pod.DeletionTimestamp != nil || !podReady(pod) || pod.Status.PodIP == "" {
 		c.remove(uid)
 		return
 	}
@@ -254,6 +295,14 @@ func (c *Cache) onAddOrUpdate(obj any) {
 		SandboxName: pod.Name,
 		Namespace:   pod.Namespace,
 	}, !unclaimed)
+
+	// A WarmPool member becomes eligible only after claim adoption removes
+	// PodWarmPoolLabel. The claim can add this user label at adoption time.
+	if unclaimed {
+		c.setRoutingGroup(uid, "", "")
+	} else {
+		c.setRoutingGroup(uid, pod.Namespace, pod.Labels[PodRoutingGroupLabel])
+	}
 }
 
 func (c *Cache) onDelete(obj any) {
@@ -319,6 +368,7 @@ func (c *Cache) removeLocked(uid types.UID) bool {
 		if k := nameKey(prev.Namespace, prev.SandboxName); c.byName[k] == uid {
 			delete(c.byName, k)
 		}
+		c.removeGroupLocked(uid)
 	}
 	return existed
 }
@@ -374,6 +424,60 @@ func (c *Cache) InvalidateByName(namespace, name, podIP string) bool {
 // DNS labels (no "/"), so the separator is unambiguous.
 func nameKey(namespace, name string) string {
 	return namespace + "/" + name
+}
+
+func groupKey(namespace, group string) string {
+	return namespace + "/" + group
+}
+
+// setRoutingGroup updates the secondary group index for uid. An empty group
+// removes membership. The entry itself remains the source of truth for Pod IP.
+func (c *Cache) setRoutingGroup(uid types.UID, namespace, group string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	newKey := ""
+	if group != "" {
+		newKey = groupKey(namespace, group)
+	}
+	if c.groupOf[uid] == newKey {
+		return
+	}
+	c.removeGroupLocked(uid)
+	if newKey == "" {
+		return
+	}
+	for _, existing := range c.byGroup[newKey] {
+		if existing == uid {
+			c.groupOf[uid] = newKey
+			return
+		}
+	}
+	c.byGroup[newKey] = append(c.byGroup[newKey], uid)
+	c.groupOf[uid] = newKey
+}
+
+// removeGroupLocked removes uid from its current routing group. Caller must
+// hold c.mu.
+func (c *Cache) removeGroupLocked(uid types.UID) {
+	k := c.groupOf[uid]
+	if k == "" {
+		return
+	}
+	uids := c.byGroup[k]
+	for i, existing := range uids {
+		if existing == uid {
+			uids = append(uids[:i], uids[i+1:]...)
+			break
+		}
+	}
+	delete(c.groupOf, uid)
+	delete(c.groupNext, k)
+	if len(uids) == 0 {
+		delete(c.byGroup, k)
+		return
+	}
+	c.byGroup[k] = uids
 }
 
 // sandboxUIDOf extracts the Sandbox CR UID from a Pod's controller

@@ -411,6 +411,27 @@ func (h *Handler) resolveTarget(r *http.Request, upstreamPath, upstreamRawPath *
 			return route.Target, nil
 		}
 	}
+	// Experimental routing-group PoC. Resolve to a concrete Sandbox before
+	// authorization and observability so existing per-Sandbox semantics stay intact.
+	if r.Header.Get(HeaderSandboxGroup) != "" {
+		group, namespace, port, perr := ParseSandboxGroupHeaders(r.Header)
+		if perr != nil {
+			return Target{}, perr
+		}
+		if h.cache == nil {
+			return Target{}, &Error{Status: http.StatusServiceUnavailable, Detail: "Sandbox group routing requires the router cache."}
+		}
+		uid, entry, ok := h.cache.GetByGroup(namespace, group)
+		if !ok {
+			return Target{}, &Error{Status: http.StatusServiceUnavailable, Detail: fmt.Sprintf("No ready sandbox available for group: %s", group)}
+		}
+		return Target{
+			ID:        entry.SandboxName,
+			UID:       string(uid),
+			Namespace: entry.Namespace,
+			Port:      port,
+		}, nil
+	}
 	return ParseSandboxHeaders(r.Header, ParseOptions{AllowLoopbackPodIP: h.cfg.AllowLoopbackPodIP})
 }
 

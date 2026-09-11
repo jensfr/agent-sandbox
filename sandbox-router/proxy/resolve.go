@@ -33,6 +33,8 @@ type Lookup interface {
 	// GetByName looks up an entry by sandbox namespace + name — the only
 	// cache path for callers that send X-Sandbox-Id without a UID.
 	GetByName(namespace, name string) (cache.Entry, bool)
+	// GetByGroup selects one Ready, claimed member of a routing group.
+	GetByGroup(namespace, group string) (types.UID, cache.Entry, bool)
 	// Invalidate evicts an entry; called by the proxy's ErrorHandler on
 	// dial-class failures so the next request doesn't retry the stale IP.
 	Invalidate(uid types.UID) bool
