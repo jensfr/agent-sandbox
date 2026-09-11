@@ -141,34 +141,9 @@ PASS: demo-pool-xxxxx was removed from routing after claim demo-b was deleted.
 PASS: all remaining members were observed.
 ```
 
-## Record the demo
+## Demo recording
 
-`record-demo.sh` runs the whole demo and starts its own router port-forward on local port `18080`:
-
-```bash
-./record-demo.sh
-```
-
-For an actual terminal recording, one simple workflow is:
-
-```bash
-asciinema rec -c './record-demo.sh' routing-group-demo.cast
-agg routing-group-demo.cast routing-group-demo.gif
-```
-
-Then add `routing-group-demo.gif` to this directory and reference it from this README:
-
-```markdown
 ![Routing group demo](routing-group-demo.gif)
-```
-
-Keep the recording short. The useful story is:
-
-1. three claims are Ready
-2. requests rotate across three sandboxes
-3. `demo-b` is deleted
-4. its pod enters termination
-5. requests continue only across the two remaining sandboxes
 
 ## Notes and limitations
 
